@@ -1,0 +1,641 @@
+{
+    "$schema": "http://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+    "parameters": {
+        "factoryName": {
+            "type": "string",
+            "metadata": "Data Factory name",
+            "defaultValue": "dev-olympics-adf-gk"
+        },
+        "datalakeLS_accountKey": {
+            "type": "secureString",
+            "metadata": "Secure string for 'accountKey' of 'datalakeLS'"
+        },
+        "datalakeLS_properties_typeProperties_url": {
+            "type": "string",
+            "defaultValue": "https://olympicsprojectgkdl.dfs.core.windows.net/"
+        },
+        "gitLS_properties_typeProperties_url": {
+            "type": "string",
+            "defaultValue": "https://raw.githubusercontent.com"
+        }
+    },
+    "variables": {
+        "factoryId": "[concat('Microsoft.DataFactory/factories/', parameters('factoryName'))]"
+    },
+    "resources": [
+        {
+            "name": "[concat(parameters('factoryName'), '/DataLakeIngestion')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "Get Metadata Folder",
+                        "type": "GetMetadata",
+                        "dependsOn": [],
+                        "policy": {
+                            "timeout": "0.12:00:00",
+                            "retry": 0,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "dataset": {
+                                "referenceName": "datalakeDS",
+                                "type": "DatasetReference",
+                                "parameters": {}
+                            },
+                            "fieldList": [
+                                "childItems"
+                            ],
+                            "storeSettings": {
+                                "type": "AzureBlobFSReadSettings",
+                                "recursive": true,
+                                "enablePartitionDiscovery": false
+                            },
+                            "formatSettings": {
+                                "type": "DelimitedTextReadSettings"
+                            }
+                        }
+                    },
+                    {
+                        "name": "For Each file in folder",
+                        "type": "ForEach",
+                        "dependsOn": [
+                            {
+                                "activity": "Get Metadata Folder",
+                                "dependencyConditions": [
+                                    "Succeeded"
+                                ]
+                            }
+                        ],
+                        "userProperties": [],
+                        "typeProperties": {
+                            "items": {
+                                "value": "@activity('Get Metadata Folder').output.childItems",
+                                "type": "Expression"
+                            },
+                            "activities": [
+                                {
+                                    "name": "If Condition match file name",
+                                    "type": "IfCondition",
+                                    "dependsOn": [],
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "expression": {
+                                            "value": "@and(equals(item().name,'nocs.csv'),equals(item().type,'File'))",
+                                            "type": "Expression"
+                                        },
+                                        "ifFalseActivities": [
+                                            {
+                                                "name": "Append file names",
+                                                "type": "AppendVariable",
+                                                "dependsOn": [],
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "variableName": "v_file_array",
+                                                    "value": {
+                                                        "value": "@item().name",
+                                                        "type": "Expression"
+                                                    }
+                                                }
+                                            }
+                                        ],
+                                        "ifTrueActivities": [
+                                            {
+                                                "name": "Copy if True",
+                                                "type": "Copy",
+                                                "dependsOn": [],
+                                                "policy": {
+                                                    "timeout": "0.12:00:00",
+                                                    "retry": 0,
+                                                    "retryIntervalInSeconds": 30,
+                                                    "secureOutput": false,
+                                                    "secureInput": false
+                                                },
+                                                "userProperties": [],
+                                                "typeProperties": {
+                                                    "source": {
+                                                        "type": "DelimitedTextSource",
+                                                        "storeSettings": {
+                                                            "type": "AzureBlobFSReadSettings",
+                                                            "recursive": true,
+                                                            "enablePartitionDiscovery": false
+                                                        },
+                                                        "formatSettings": {
+                                                            "type": "DelimitedTextReadSettings"
+                                                        }
+                                                    },
+                                                    "sink": {
+                                                        "type": "DelimitedTextSink",
+                                                        "storeSettings": {
+                                                            "type": "AzureBlobFSWriteSettings"
+                                                        },
+                                                        "formatSettings": {
+                                                            "type": "DelimitedTextWriteSettings",
+                                                            "quoteAllText": true,
+                                                            "fileExtension": ".txt"
+                                                        }
+                                                    },
+                                                    "enableStaging": false,
+                                                    "translator": {
+                                                        "type": "TabularTranslator",
+                                                        "typeConversion": true,
+                                                        "typeConversionSettings": {
+                                                            "allowDataTruncation": true,
+                                                            "treatBooleanAsNumber": false
+                                                        }
+                                                    }
+                                                },
+                                                "inputs": [
+                                                    {
+                                                        "referenceName": "paramsDS",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "container": "source",
+                                                            "folder": "raw_data",
+                                                            "file": "nocs.csv"
+                                                        }
+                                                    }
+                                                ],
+                                                "outputs": [
+                                                    {
+                                                        "referenceName": "paramsDS",
+                                                        "type": "DatasetReference",
+                                                        "parameters": {
+                                                            "container": "bronze",
+                                                            "folder": "nocs",
+                                                            "file": {
+                                                                "value": "@item().name",
+                                                                "type": "Expression"
+                                                            }
+                                                        }
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        }
+                    },
+                    {
+                        "name": "Set number of files",
+                        "type": "SetVariable",
+                        "dependsOn": [
+                            {
+                                "activity": "For Each file in folder",
+                                "dependencyConditions": [
+                                    "Completed"
+                                ]
+                            }
+                        ],
+                        "policy": {
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "variableName": "v_file_no",
+                            "value": {
+                                "value": "@length(variables('v_file_array'))",
+                                "type": "Expression"
+                            }
+                        }
+                    },
+                    {
+                        "name": "Set file names",
+                        "type": "SetVariable",
+                        "dependsOn": [
+                            {
+                                "activity": "For Each file in folder",
+                                "dependencyConditions": [
+                                    "Completed"
+                                ]
+                            }
+                        ],
+                        "policy": {
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "variableName": "v_file_names",
+                            "value": {
+                                "value": "@string(variables('v_file_array'))",
+                                "type": "Expression"
+                            }
+                        }
+                    }
+                ],
+                "policy": {
+                    "elapsedTimeMetric": {}
+                },
+                "variables": {
+                    "v_file_array": {
+                        "type": "Array"
+                    },
+                    "v_file_no": {
+                        "type": "Integer"
+                    },
+                    "v_file_names": {
+                        "type": "String"
+                    }
+                },
+                "annotations": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/datalakeDS')]",
+                "[concat(variables('factoryId'), '/datasets/paramsDS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/gitToBronze')]",
+            "type": "Microsoft.DataFactory/factories/pipelines",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "activities": [
+                    {
+                        "name": "LookupJSON",
+                        "type": "Lookup",
+                        "dependsOn": [],
+                        "policy": {
+                            "timeout": "0.12:00:00",
+                            "retry": 0,
+                            "retryIntervalInSeconds": 30,
+                            "secureOutput": false,
+                            "secureInput": false
+                        },
+                        "userProperties": [],
+                        "typeProperties": {
+                            "source": {
+                                "type": "JsonSource",
+                                "storeSettings": {
+                                    "type": "AzureBlobFSReadSettings",
+                                    "recursive": true,
+                                    "enablePartitionDiscovery": false
+                                },
+                                "formatSettings": {
+                                    "type": "JsonReadSettings"
+                                }
+                            },
+                            "dataset": {
+                                "referenceName": "JSONds",
+                                "type": "DatasetReference",
+                                "parameters": {}
+                            },
+                            "firstRowOnly": false
+                        }
+                    },
+                    {
+                        "name": "ForEachCSVFILE",
+                        "type": "ForEach",
+                        "dependsOn": [
+                            {
+                                "activity": "LookupJSON",
+                                "dependencyConditions": [
+                                    "Succeeded"
+                                ]
+                            }
+                        ],
+                        "userProperties": [],
+                        "typeProperties": {
+                            "items": {
+                                "value": "@activity('LookupJSON').output.value",
+                                "type": "Expression"
+                            },
+                            "activities": [
+                                {
+                                    "name": "gitToBronzeCopy",
+                                    "type": "Copy",
+                                    "dependsOn": [],
+                                    "policy": {
+                                        "timeout": "0.12:00:00",
+                                        "retry": 0,
+                                        "retryIntervalInSeconds": 30,
+                                        "secureOutput": false,
+                                        "secureInput": false
+                                    },
+                                    "userProperties": [],
+                                    "typeProperties": {
+                                        "source": {
+                                            "type": "DelimitedTextSource",
+                                            "storeSettings": {
+                                                "type": "HttpReadSettings",
+                                                "requestMethod": "GET"
+                                            },
+                                            "formatSettings": {
+                                                "type": "DelimitedTextReadSettings"
+                                            }
+                                        },
+                                        "sink": {
+                                            "type": "ParquetSink",
+                                            "storeSettings": {
+                                                "type": "AzureBlobFSWriteSettings"
+                                            },
+                                            "formatSettings": {
+                                                "type": "ParquetWriteSettings"
+                                            }
+                                        },
+                                        "enableStaging": false,
+                                        "enableSkipIncompatibleRow": true,
+                                        "translator": {
+                                            "type": "TabularTranslator",
+                                            "typeConversion": true,
+                                            "typeConversionSettings": {
+                                                "allowDataTruncation": true,
+                                                "treatBooleanAsNumber": false
+                                            }
+                                        }
+                                    },
+                                    "inputs": [
+                                        {
+                                            "referenceName": "rawdatagit",
+                                            "type": "DatasetReference",
+                                            "parameters": {
+                                                "p_rel_url": {
+                                                    "value": "@item().p_rel_url",
+                                                    "type": "Expression"
+                                                }
+                                            }
+                                        }
+                                    ],
+                                    "outputs": [
+                                        {
+                                            "referenceName": "bronzedl",
+                                            "type": "DatasetReference",
+                                            "parameters": {
+                                                "p_folder": {
+                                                    "value": "@item().p_folder",
+                                                    "type": "Expression"
+                                                },
+                                                "p_file": {
+                                                    "value": "@item().p_file",
+                                                    "type": "Expression"
+                                                }
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "policy": {
+                    "elapsedTimeMetric": {}
+                },
+                "annotations": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/datasets/JSONds')]",
+                "[concat(variables('factoryId'), '/datasets/rawdatagit')]",
+                "[concat(variables('factoryId'), '/datasets/bronzedl')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/JSONds')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "datalakeLS",
+                    "type": "LinkedServiceReference"
+                },
+                "annotations": [],
+                "type": "Json",
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobFSLocation",
+                        "fileName": "param.json",
+                        "fileSystem": "bronze"
+                    }
+                },
+                "schema": {
+                    "type": "object",
+                    "properties": {
+                        "p_rel_url": {
+                            "type": "string"
+                        },
+                        "p_folder": {
+                            "type": "string"
+                        },
+                        "p_file": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/datalakeLS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/bronzedl')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "datalakeLS",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "p_folder": {
+                        "type": "string"
+                    },
+                    "p_file": {
+                        "type": "string"
+                    }
+                },
+                "annotations": [],
+                "type": "Parquet",
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobFSLocation",
+                        "fileName": {
+                            "value": "@dataset().p_file",
+                            "type": "Expression"
+                        },
+                        "folderPath": {
+                            "value": "@dataset().p_folder",
+                            "type": "Expression"
+                        },
+                        "fileSystem": "bronze"
+                    },
+                    "compressionCodec": "snappy"
+                },
+                "schema": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/datalakeLS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/datalakeDS')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "datalakeLS",
+                    "type": "LinkedServiceReference"
+                },
+                "annotations": [],
+                "type": "DelimitedText",
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobFSLocation",
+                        "folderPath": "raw_data",
+                        "fileSystem": "source"
+                    },
+                    "columnDelimiter": ",",
+                    "escapeChar": "\\",
+                    "firstRowAsHeader": true,
+                    "quoteChar": "\""
+                },
+                "schema": [
+                    {
+                        "name": "event",
+                        "type": "String"
+                    },
+                    {
+                        "name": "tag",
+                        "type": "String"
+                    },
+                    {
+                        "name": "sport",
+                        "type": "String"
+                    },
+                    {
+                        "name": "sport_code",
+                        "type": "String"
+                    },
+                    {
+                        "name": "sport_url",
+                        "type": "String"
+                    }
+                ]
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/datalakeLS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/paramsDS')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "datalakeLS",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "container": {
+                        "type": "string"
+                    },
+                    "folder": {
+                        "type": "string"
+                    },
+                    "file": {
+                        "type": "string"
+                    }
+                },
+                "annotations": [],
+                "type": "DelimitedText",
+                "typeProperties": {
+                    "location": {
+                        "type": "AzureBlobFSLocation",
+                        "fileName": {
+                            "value": "@dataset().file",
+                            "type": "Expression"
+                        },
+                        "folderPath": {
+                            "value": "@dataset().folder",
+                            "type": "Expression"
+                        },
+                        "fileSystem": {
+                            "value": "@dataset().container",
+                            "type": "Expression"
+                        }
+                    },
+                    "columnDelimiter": ",",
+                    "escapeChar": "\\",
+                    "firstRowAsHeader": true,
+                    "quoteChar": "\""
+                },
+                "schema": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/datalakeLS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/rawdatagit')]",
+            "type": "Microsoft.DataFactory/factories/datasets",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "linkedServiceName": {
+                    "referenceName": "gitLS",
+                    "type": "LinkedServiceReference"
+                },
+                "parameters": {
+                    "p_rel_url": {
+                        "type": "string"
+                    }
+                },
+                "annotations": [],
+                "type": "DelimitedText",
+                "typeProperties": {
+                    "location": {
+                        "type": "HttpServerLocation",
+                        "relativeUrl": {
+                            "value": "@dataset().p_rel_url",
+                            "type": "Expression"
+                        }
+                    },
+                    "columnDelimiter": ",",
+                    "escapeChar": "\\",
+                    "firstRowAsHeader": true,
+                    "quoteChar": "\""
+                },
+                "schema": []
+            },
+            "dependsOn": [
+                "[concat(variables('factoryId'), '/linkedServices/gitLS')]"
+            ]
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/datalakeLS')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "AzureBlobFS",
+                "typeProperties": {
+                    "url": "[parameters('datalakeLS_properties_typeProperties_url')]",
+                    "accountKey": {
+                        "type": "SecureString",
+                        "value": "[parameters('datalakeLS_accountKey')]"
+                    }
+                }
+            },
+            "dependsOn": []
+        },
+        {
+            "name": "[concat(parameters('factoryName'), '/gitLS')]",
+            "type": "Microsoft.DataFactory/factories/linkedServices",
+            "apiVersion": "2018-06-01",
+            "properties": {
+                "annotations": [],
+                "type": "HttpServer",
+                "typeProperties": {
+                    "url": "[parameters('gitLS_properties_typeProperties_url')]",
+                    "enableServerCertificateValidation": true,
+                    "authenticationType": "Anonymous"
+                }
+            },
+            "dependsOn": []
+        }
+    ]
+}
